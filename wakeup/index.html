@@ -396,6 +396,10 @@ input[type="time"]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:
       </div>
     </div>
     <div>
+      <span class="form-row-label">Date</span>
+      <input type="date" id="entryDate" oninput="onAddDateChangeDesk(this.value)">
+    </div>
+    <div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span class="form-row-label" style="margin-bottom:0">Time</span>
         <button onclick="expandTimeRow()" id="timeExpandBtn" style="background:none;border:none;font-size:0.65rem;color:var(--text2);cursor:pointer;padding:0;display:flex;align-items:center;gap:3px">
@@ -542,6 +546,10 @@ input[type="time"]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:
             </button>
           </div>
         </div>
+      </div>
+      <div>
+        <span class="form-row-label">Date</span>
+        <input type="date" id="entryDateMob" oninput="onAddDateChangeMob(this.value)">
       </div>
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
@@ -732,6 +740,8 @@ let selectedCatColor=P_COLORS[0], selectedCatEmoji='✨';
 let currentMobScreen='home';
 let TODAY=todayKey();
 let graphViewDate=TODAY, graphViewMode='graph', graphViewEntries=[];
+let addDateDesk=TODAY, addDateEntriesDesk=[];
+let addDateMob=TODAY, addDateEntriesMob=[];
 
 // ══ INDEXEDDB ══
 function openDB(){
@@ -772,11 +782,32 @@ function startDayWatcher(){
       TODAY=k;
       if(graphViewDate===old){graphViewDate=k;graphViewEntries=[];}
       await loadEntries();
+      if(addDateDesk===old){addDateDesk=k;addDateEntriesDesk=entries;const d1=document.getElementById('entryDate');if(d1){d1.value=k;d1.max=k;}}
+      if(addDateMob===old){addDateMob=k;addDateEntriesMob=entries;const d2=document.getElementById('entryDateMob');if(d2){d2.value=k;d2.max=k;}}
       setSmartEndTime();setSmartEndTimeMob();
       renderAll();
       showToast('🌙 New day started');
     }
   },30000);
+}
+
+// ══ ADD-ENTRY DATE (backfill any day) ══
+function resetAddDateInputs(){
+  addDateDesk=TODAY;addDateMob=TODAY;
+  addDateEntriesDesk=entries;addDateEntriesMob=entries;
+  const d1=document.getElementById('entryDate');if(d1){d1.value=TODAY;d1.max=TODAY;}
+  const d2=document.getElementById('entryDateMob');if(d2){d2.value=TODAY;d2.max=TODAY;}
+}
+function getLastEndTimeFrom(list){if(!list||!list.length)return null;return [...list].sort((a,b)=>timeToMin(b.end)-timeToMin(a.end))[0].end}
+async function onAddDateChangeDesk(val){
+  addDateDesk=val||TODAY;
+  addDateEntriesDesk=(addDateDesk===TODAY)?entries:await loadEntriesForDate(addDateDesk);
+  updateStartDisplay();
+}
+async function onAddDateChangeMob(val){
+  addDateMob=val||TODAY;
+  addDateEntriesMob=(addDateMob===TODAY)?entries:await loadEntriesForDate(addDateMob);
+  updateStartDisplayMob();
 }
 
 // ══ INIT ══
@@ -792,6 +823,7 @@ async function init(){
   buildPersonColorSwatches();buildPersonEmojiPicker();
   buildCatEmojiGrid();buildCatColorSwatches();
   await loadEntries();
+  resetAddDateInputs();
   setSmartEndTime();setSmartEndTimeMob();
   renderAll();
   startDayWatcher();
@@ -820,7 +852,7 @@ async function deletePerson(id){
 async function switchPerson(id){
   currentPersonId=id;localStorage.setItem('timelog_person',id);
   graphViewDate=TODAY;graphViewMode='graph';graphViewEntries=[];
-  await loadEntries();setSmartEndTime();setSmartEndTimeMob();renderAll();
+  await loadEntries();resetAddDateInputs();setSmartEndTime();setSmartEndTimeMob();renderAll();
   closeDropdown('deskUserDrop','deskDropCaret');closeDropdown('mobUserDrop','mobDropCaret');
 }
 
@@ -860,14 +892,14 @@ document.addEventListener('click',e=>{
 
 // ══ SMART TIME ══
 function setSmartEndTime(){const now=new Date();const hh=pad(now.getHours()),mm=pad(now.getMinutes());document.getElementById('endTime').value=`${hh}:${mm}`;document.getElementById('endTime2').value=`${hh}:${mm}`;updateStartDisplay()}
-function updateStartDisplay(){const lastEnd=getLastEndTime();const disp=lastEnd?`From: ${fmt12(lastEnd)}`:'From: start of day';document.getElementById('startDisplay').textContent=disp;if(lastEnd)document.getElementById('startTime').value=lastEnd}
+function updateStartDisplay(){const lastEnd=getLastEndTimeFrom(addDateEntriesDesk);const disp=lastEnd?`From: ${fmt12(lastEnd)}`:'From: start of day';document.getElementById('startDisplay').textContent=disp;if(lastEnd)document.getElementById('startTime').value=lastEnd}
 function setSmartEndTimeMob(){const now=new Date();const hh=pad(now.getHours()),mm=pad(now.getMinutes());const e=document.getElementById('endTimeMob');if(e)e.value=`${hh}:${mm}`;const e2=document.getElementById('endTime2Mob');if(e2)e2.value=`${hh}:${mm}`;updateStartDisplayMob()}
-function updateStartDisplayMob(){const lastEnd=getLastEndTime();const disp=lastEnd?`From: ${fmt12(lastEnd)}`:'From: start of day';const el=document.getElementById('startDisplayMob');if(el)el.textContent=disp;const st=document.getElementById('startTimeMob');if(lastEnd&&st)st.value=lastEnd}
+function updateStartDisplayMob(){const lastEnd=getLastEndTimeFrom(addDateEntriesMob);const disp=lastEnd?`From: ${fmt12(lastEnd)}`:'From: start of day';const el=document.getElementById('startDisplayMob');if(el)el.textContent=disp;const st=document.getElementById('startTimeMob');if(lastEnd&&st)st.value=lastEnd}
 function getLastEndTime(){if(!entries.length)return null;return [...entries].sort((a,b)=>timeToMin(b.end)-timeToMin(a.end))[0].end}
-function getEffectiveStart(){if(timeExpanded)return document.getElementById('startTime').value;const last=getLastEndTime();if(last)return last;const ev=document.getElementById('endTime').value;if(!ev)return null;const[h,m]=ev.split(':').map(Number);const tot=h*60+m-30;if(tot<0)return'00:00';return`${pad(Math.floor(tot/60))}:${pad(tot%60)}`}
-function getEffectiveStartMob(){if(timeExpandedMob){const s=document.getElementById('startTimeMob');return s?s.value:null}const last=getLastEndTime();if(last)return last;const ev=document.getElementById('endTimeMob');if(!ev||!ev.value)return null;const[h,m]=ev.value.split(':').map(Number);const tot=h*60+m-30;if(tot<0)return'00:00';return`${pad(Math.floor(tot/60))}:${pad(tot%60)}`}
-function expandTimeRow(){timeExpanded=!timeExpanded;document.getElementById('timeSimple').style.display=timeExpanded?'none':'flex';document.getElementById('timeExpanded').style.display=timeExpanded?'block':'none';const btn=document.getElementById('timeExpandBtn');btn.innerHTML=timeExpanded?'<i class="bi bi-check2" style="font-size:0.6rem"></i> use auto':'<i class="bi bi-pencil" style="font-size:0.6rem"></i> edit start';if(timeExpanded){const last=getLastEndTime();if(last)document.getElementById('startTime').value=last}}
-function expandTimeRowMob(){timeExpandedMob=!timeExpandedMob;document.getElementById('timeSimpleMob').style.display=timeExpandedMob?'none':'flex';document.getElementById('timeExpandedMob').style.display=timeExpandedMob?'block':'none';const btn=document.getElementById('timeExpandBtnMob');btn.innerHTML=timeExpandedMob?'<i class="bi bi-check2" style="font-size:0.6rem"></i> use auto':'<i class="bi bi-pencil" style="font-size:0.6rem"></i> edit start';if(timeExpandedMob){const last=getLastEndTime();const st=document.getElementById('startTimeMob');if(last&&st)st.value=last}}
+function getEffectiveStart(){if(timeExpanded)return document.getElementById('startTime').value;const last=getLastEndTimeFrom(addDateEntriesDesk);if(last)return last;const ev=document.getElementById('endTime').value;if(!ev)return null;const[h,m]=ev.split(':').map(Number);const tot=h*60+m-30;if(tot<0)return'00:00';return`${pad(Math.floor(tot/60))}:${pad(tot%60)}`}
+function getEffectiveStartMob(){if(timeExpandedMob){const s=document.getElementById('startTimeMob');return s?s.value:null}const last=getLastEndTimeFrom(addDateEntriesMob);if(last)return last;const ev=document.getElementById('endTimeMob');if(!ev||!ev.value)return null;const[h,m]=ev.value.split(':').map(Number);const tot=h*60+m-30;if(tot<0)return'00:00';return`${pad(Math.floor(tot/60))}:${pad(tot%60)}`}
+function expandTimeRow(){timeExpanded=!timeExpanded;document.getElementById('timeSimple').style.display=timeExpanded?'none':'flex';document.getElementById('timeExpanded').style.display=timeExpanded?'block':'none';const btn=document.getElementById('timeExpandBtn');btn.innerHTML=timeExpanded?'<i class="bi bi-check2" style="font-size:0.6rem"></i> use auto':'<i class="bi bi-pencil" style="font-size:0.6rem"></i> edit start';if(timeExpanded){const last=getLastEndTimeFrom(addDateEntriesDesk);if(last)document.getElementById('startTime').value=last}}
+function expandTimeRowMob(){timeExpandedMob=!timeExpandedMob;document.getElementById('timeSimpleMob').style.display=timeExpandedMob?'none':'flex';document.getElementById('timeExpandedMob').style.display=timeExpandedMob?'block':'none';const btn=document.getElementById('timeExpandBtnMob');btn.innerHTML=timeExpandedMob?'<i class="bi bi-check2" style="font-size:0.6rem"></i> use auto':'<i class="bi bi-pencil" style="font-size:0.6rem"></i> edit start';if(timeExpandedMob){const last=getLastEndTimeFrom(addDateEntriesMob);const st=document.getElementById('startTimeMob');if(last&&st)st.value=last}}
 
 // ══ CAT PICKER ══
 function buildCatGrids(){
@@ -973,22 +1005,29 @@ function addCustomCat(){
 async function addEntry(){
   if(!currentPersonId)return showToast('Select a person first');
   if(!selectedCat)return showToast('Pick a category');
+  const date=addDateDesk||TODAY;
   const end=timeExpanded?document.getElementById('endTime2').value:document.getElementById('endTime').value;
   const start=getEffectiveStart();
   if(!start||!end)return showToast('Set time');
   const s=timeToMin(start),e2=timeToMin(end);
   if(e2<=s)return showToast('End must be after start');
   const desc=document.getElementById('descInput').value.trim();
-  const entry={id:'e_'+Date.now(),personId:currentPersonId,personDate:`${currentPersonId}_${TODAY}`,date:TODAY,cat:selectedCat,start,end,desc:desc||catMap[selectedCat].label,duration:e2-s,created:Date.now()};
-  await dbPut('entries',entry);entries.push(entry);entries.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));
-  const now=new Date();const newEnd=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  document.getElementById('endTime').value=newEnd;document.getElementById('endTime2').value=newEnd;
+  const entry={id:'e_'+Date.now(),personId:currentPersonId,personDate:`${currentPersonId}_${date}`,date,cat:selectedCat,start,end,desc:desc||catMap[selectedCat].label,duration:e2-s,created:Date.now()};
+  await dbPut('entries',entry);
+  if(date===TODAY){entries.push(entry);entries.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));}
+  else{addDateEntriesDesk.push(entry);addDateEntriesDesk.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));}
+  if(date===graphViewDate)graphViewEntries=(date===TODAY)?entries:addDateEntriesDesk;
+  if(date===TODAY){
+    const now=new Date();const newEnd=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    document.getElementById('endTime').value=newEnd;document.getElementById('endTime2').value=newEnd;
+  }
   document.getElementById('descInput').value='';updateStartDisplay();
-  renderAll();showToast(`✅ ${catMap[selectedCat].icon} ${formatDur(entry.duration)} logged`);
+  renderAll();showToast(`✅ ${catMap[selectedCat].icon} ${formatDur(entry.duration)} logged${date!==TODAY?' for '+date:''}`);
 }
 async function addEntryMob(){
   if(!currentPersonId)return showToast('Select a person first');
   if(!selectedCat)return showToast('Pick a category');
+  const date=addDateMob||TODAY;
   const endEl=document.getElementById('endTimeMob');
   const end2El=document.getElementById('endTime2Mob');
   const end=timeExpandedMob?(end2El?end2El.value:''):(endEl?endEl.value:'');
@@ -998,12 +1037,17 @@ async function addEntryMob(){
   if(e2<=s)return showToast('End must be after start');
   const descEl=document.getElementById('descInputMob');
   const desc=descEl?descEl.value.trim():'';
-  const entry={id:'e_'+Date.now(),personId:currentPersonId,personDate:`${currentPersonId}_${TODAY}`,date:TODAY,cat:selectedCat,start,end,desc:desc||catMap[selectedCat].label,duration:e2-s,created:Date.now()};
-  await dbPut('entries',entry);entries.push(entry);entries.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));
-  const now=new Date();const newEnd=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  if(endEl)endEl.value=newEnd;if(end2El)end2El.value=newEnd;
+  const entry={id:'e_'+Date.now(),personId:currentPersonId,personDate:`${currentPersonId}_${date}`,date,cat:selectedCat,start,end,desc:desc||catMap[selectedCat].label,duration:e2-s,created:Date.now()};
+  await dbPut('entries',entry);
+  if(date===TODAY){entries.push(entry);entries.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));}
+  else{addDateEntriesMob.push(entry);addDateEntriesMob.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));}
+  if(date===graphViewDate)graphViewEntries=(date===TODAY)?entries:addDateEntriesMob;
+  if(date===TODAY){
+    const now=new Date();const newEnd=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    if(endEl)endEl.value=newEnd;if(end2El)end2El.value=newEnd;
+  }
   if(descEl)descEl.value='';updateStartDisplayMob();
-  renderAll();showToast(`✅ ${catMap[selectedCat].icon} ${formatDur(entry.duration)} logged`);
+  renderAll();showToast(`✅ ${catMap[selectedCat].icon} ${formatDur(entry.duration)} logged${date!==TODAY?' for '+date:''}`);
   switchMobScreen('home');
 }
 
