@@ -246,6 +246,11 @@ input[type="time"]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:
 .sum-val{font-size:1.3rem;font-weight:800;color:var(--text);display:block}
 .sum-lbl{font-size:0.62rem;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px}
 .sum-icon{font-size:1.2rem;margin-bottom:4px;display:block}
+.graph-date-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.graph-date-input{flex:1;min-width:140px;width:auto}
+.graph-view-toggle{display:flex;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:3px;flex-shrink:0}
+.gvt-btn{background:none;border:none;color:var(--text2);font-size:0.72rem;font-weight:600;padding:7px 12px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:5px;transition:all var(--trans)}
+.gvt-btn.active{background:var(--accent);color:#fff}
 
 /* ── ACCOUNT ── */
 .account-section{padding:16px;display:flex;flex-direction:column;gap:16px}
@@ -725,7 +730,8 @@ let timeExpanded=false, timeExpandedMob=false;
 let selectedPersonColor=P_COLORS[0], selectedPersonEmoji=P_EMOJIS[0];
 let selectedCatColor=P_COLORS[0], selectedCatEmoji='✨';
 let currentMobScreen='home';
-const TODAY=todayKey();
+let TODAY=todayKey();
+let graphViewDate=TODAY, graphViewMode='graph', graphViewEntries=[];
 
 // ══ INDEXEDDB ══
 function openDB(){
@@ -750,6 +756,28 @@ function dbPut(store,obj){return new Promise((res,rej)=>{const tx=db.transaction
 function dbDelete(store,key){return new Promise((res,rej)=>{const tx=db.transaction(store,'readwrite');const req=tx.objectStore(store).delete(key);req.onsuccess=()=>res();req.onerror=()=>rej(req.error);})}
 async function loadPersons(){persons=await dbGetAll('persons');persons.sort((a,b)=>a.created-b.created)}
 async function loadEntries(){if(!currentPersonId){entries=[];return}entries=await dbGetIndex('entries','personDate',`${currentPersonId}_${TODAY}`);entries.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start))}
+async function loadEntriesForDate(date){
+  if(!currentPersonId)return[];
+  const list=await dbGetIndex('entries','personDate',`${currentPersonId}_${date}`);
+  list.sort((a,b)=>timeToMin(a.start)-timeToMin(b.start));
+  return list;
+}
+
+// ══ DAY ROLLOVER (ensures each day = 12:00am – 11:59pm, 24hr) ══
+function startDayWatcher(){
+  setInterval(async()=>{
+    const k=todayKey();
+    if(k!==TODAY){
+      const old=TODAY;
+      TODAY=k;
+      if(graphViewDate===old){graphViewDate=k;graphViewEntries=[];}
+      await loadEntries();
+      setSmartEndTime();setSmartEndTimeMob();
+      renderAll();
+      showToast('🌙 New day started');
+    }
+  },30000);
+}
 
 // ══ INIT ══
 async function init(){
@@ -766,6 +794,7 @@ async function init(){
   await loadEntries();
   setSmartEndTime();setSmartEndTimeMob();
   renderAll();
+  startDayWatcher();
 }
 
 // ══ PERSONS ══
@@ -790,6 +819,7 @@ async function deletePerson(id){
 }
 async function switchPerson(id){
   currentPersonId=id;localStorage.setItem('timelog_person',id);
+  graphViewDate=TODAY;graphViewMode='graph';graphViewEntries=[];
   await loadEntries();setSmartEndTime();setSmartEndTimeMob();renderAll();
   closeDropdown('deskUserDrop','deskDropCaret');closeDropdown('mobUserDrop','mobDropCaret');
 }
@@ -1090,29 +1120,56 @@ function getCSSVar(name){
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function buildGraphHTML(){
-  if(!entries.length) return `<div class="graph-section"><div class="empty-state"><span class="empty-icon"><i class="bi bi-graph-up" style="font-size:2rem;opacity:0.3"></i></span><p>Add entries to see graphs.</p></div></div>`;
+// ══ GRAPH DATE / VIEW CONTROLS ══
+async function changeGraphDate(val){
+  if(!val)return;
+  graphViewDate=val;
+  graphViewEntries=(val===TODAY)?entries:await loadEntriesForDate(val);
+  renderGraphs();renderGraphsMob();
+}
+function setGraphView(mode){
+  graphViewMode=mode;
+  renderGraphs();renderGraphsMob();
+}
+function getGraphEntries(){
+  return graphViewDate===TODAY?entries:graphViewEntries;
+}
+function buildGraphHTML(srcEntries){
+  srcEntries=srcEntries||[];
+  const dateBar=`<div class="graph-date-bar">
+    <input type="date" class="graph-date-input" value="${graphViewDate}" max="${TODAY}" onchange="changeGraphDate(this.value)">
+    <div class="graph-view-toggle">
+      <button class="gvt-btn ${graphViewMode==='graph'?'active':''}" onclick="setGraphView('graph')"><i class="bi bi-bar-chart-fill"></i> Graph</button>
+      <button class="gvt-btn ${graphViewMode==='timeline'?'active':''}" onclick="setGraphView('timeline')"><i class="bi bi-clock-history"></i> Timeline</button>
+    </div>
+  </div>`;
+  if(!srcEntries.length) return `<div class="graph-section">${dateBar}<div class="empty-state"><span class="empty-icon"><i class="bi bi-graph-up" style="font-size:2rem;opacity:0.3"></i></span><p>No entries for this date.</p></div></div>`;
+  if(graphViewMode==='timeline'){
+    const tlHtml=srcEntries.map(e=>buildEntryHTML(e,e.date===TODAY)).join('');
+    return `<div class="graph-section">${dateBar}<div class="timeline" style="padding-bottom:8px">${tlHtml}</div></div>`;
+  }
   const totals={};let grand=0;
-  entries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
+  srcEntries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
   const sorted=Object.entries(totals).sort((a,b)=>b[1]-a[1]);
   const topCat=sorted[0]?catMap[sorted[0][0]]:null;
-  const avgDur=entries.length?Math.round(grand/entries.length):0;
+  const avgDur=srcEntries.length?Math.round(grand/srcEntries.length):0;
   const summaryCards=`<div class="summary-row">
     <div class="sum-card"><span class="sum-icon">${topCat?topCat.icon:'—'}</span><span class="sum-val">${topCat?topCat.label:'—'}</span><div class="sum-lbl">Top category</div></div>
     <div class="sum-card"><span class="sum-icon"><i class="bi bi-clock"></i></span><span class="sum-val">${formatDur(grand)}</span><div class="sum-lbl">Total tracked</div></div>
-    <div class="sum-card"><span class="sum-icon"><i class="bi bi-activity"></i></span><span class="sum-val">${entries.length}</span><div class="sum-lbl">Activities</div></div>
+    <div class="sum-card"><span class="sum-icon"><i class="bi bi-activity"></i></span><span class="sum-val">${srcEntries.length}</span><div class="sum-lbl">Activities</div></div>
     <div class="sum-card"><span class="sum-icon"><i class="bi bi-stopwatch"></i></span><span class="sum-val">${formatDur(avgDur)}</span><div class="sum-lbl">Avg duration</div></div>
   </div>`;
-  return `<div class="graph-section">${summaryCards}
+  return `<div class="graph-section">${dateBar}${summaryCards}
     <div class="graph-card"><div class="graph-title"><i class="bi bi-bar-chart-fill"></i> Time by Category</div><canvas id="chartBar" height="220"></canvas></div>
     <div class="graph-card"><div class="graph-title"><i class="bi bi-pie-chart-fill"></i> Category Share</div><div style="max-width:280px;margin:0 auto"><canvas id="chartDoughnut"></canvas></div></div>
-    <div class="graph-card"><div class="graph-title"><i class="bi bi-grid-3x3"></i> Activity Heatmap</div><canvas id="chartHeatmap" height="80"></canvas></div>
+    <div class="graph-card"><div class="graph-title"><i class="bi bi-grid-3x3"></i> Activity Heatmap (24hr)</div><canvas id="chartHeatmap" height="80"></canvas></div>
   </div>`;
 }
 
-function renderCharts(){
+function renderCharts(srcEntries){
+  srcEntries=srcEntries||entries;
   const totals={};let grand=0;
-  entries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
+  srcEntries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
   const sorted=Object.entries(totals).sort((a,b)=>b[1]-a[1]);
   const text2=getCSSVar('--text2');
   const border=getCSSVar('--border');
@@ -1177,7 +1234,7 @@ function renderCharts(){
   const heatEl=document.getElementById('chartHeatmap');
   if(heatEl){
     const hourBuckets=Array(24).fill(0);
-    entries.forEach(e=>{
+    srcEntries.forEach(e=>{
       const sh=timeToMin(e.start),eh=timeToMin(e.end);
       for(let h=Math.floor(sh/60);h<=Math.floor(eh/60)&&h<24;h++)hourBuckets[h]+=Math.min(60,(h+1)*60-sh,eh-h*60,eh-sh);
     });
@@ -1201,21 +1258,24 @@ function renderGraphs(){
   const el=document.getElementById('graphContent');
   if(el){
     ['bar','doughnut','heatmap'].forEach(id=>destroyChart(id));
-    el.innerHTML=buildGraphHTML();
-    if(entries.length) setTimeout(()=>renderCharts(),0);
+    const src=getGraphEntries();
+    el.innerHTML=buildGraphHTML(src);
+    if(src.length&&graphViewMode==='graph') setTimeout(()=>renderCharts(src),0);
   }
 }
 function renderGraphsMob(){
   const el=document.getElementById('graphContentMob');
   if(el){
-    el.innerHTML=buildGraphHTML().replace(/id="chartBar"/g,'id="chartBarMob"').replace(/id="chartDoughnut"/g,'id="chartDoughnutMob"').replace(/id="chartHeatmap"/g,'id="chartHeatmapMob"');
-    if(entries.length) setTimeout(()=>renderChartsMob(),0);
+    const src=getGraphEntries();
+    el.innerHTML=buildGraphHTML(src).replace(/id="chartBar"/g,'id="chartBarMob"').replace(/id="chartDoughnut"/g,'id="chartDoughnutMob"').replace(/id="chartHeatmap"/g,'id="chartHeatmapMob"');
+    if(src.length&&graphViewMode==='graph') setTimeout(()=>renderChartsMob(src),0);
   }
 }
-function renderChartsMob(){
+function renderChartsMob(srcEntries){
   // reuse same logic with mob IDs
+  srcEntries=srcEntries||entries;
   const totals={};let grand=0;
-  entries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
+  srcEntries.forEach(e=>{totals[e.cat]=(totals[e.cat]||0)+e.duration;grand+=e.duration;});
   const sorted=Object.entries(totals).sort((a,b)=>b[1]-a[1]);
   const text2=getCSSVar('--text2');const border=getCSSVar('--border');const text=getCSSVar('--text');const surface=getCSSVar('--surface');
   destroyChart('barMob');
@@ -1236,7 +1296,7 @@ function renderChartsMob(){
   destroyChart('heatmapMob');
   const hEl=document.getElementById('chartHeatmapMob');
   if(hEl){
-    const hb=Array(24).fill(0);entries.forEach(e=>{const sh=timeToMin(e.start),eh=timeToMin(e.end);for(let h=Math.floor(sh/60);h<=Math.floor(eh/60)&&h<24;h++)hb[h]+=Math.min(60,(h+1)*60-sh,eh-h*60,eh-sh);});
+    const hb=Array(24).fill(0);srcEntries.forEach(e=>{const sh=timeToMin(e.start),eh=timeToMin(e.end);for(let h=Math.floor(sh/60);h<=Math.floor(eh/60)&&h<24;h++)hb[h]+=Math.min(60,(h+1)*60-sh,eh-h*60,eh-sh);});
     _chartInstances['heatmapMob']=new Chart(hEl,{type:'bar',data:{labels:Array.from({length:24},(_,i)=>i%3===0?`${i}h`:''),datasets:[{data:hb,backgroundColor:hb.map(v=>v>0?`rgba(124,58,237,${(v/60*0.8+0.2).toFixed(2)})`:'rgba(124,58,237,0.07)'),borderRadius:4,borderSkipped:false}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` ${formatDur(ctx.raw)}`}}},scales:{x:{ticks:{color:text2,font:{size:9}},grid:{display:false},border:{display:false}},y:{display:false}}}});
   }
 }
